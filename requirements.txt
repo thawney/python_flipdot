@@ -1,0 +1,14 @@
+# FlipDot Display Library Requirements
+# ===================================
+#
+# Install with: pip install -r requirements.txt
+#
+
+# Core serial communication for FlipDot displays
+pyserial>=3.5
+
+# HTTP requests for weather data (used in clock.py)
+requests>=2.25.0
+
+# Visual simulation (optional - only needed for visual_simulator.py)
+pygame>=2.0.0
