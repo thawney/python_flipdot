@@ -2,13 +2,15 @@
 # -*- coding: utf-8 -*-
 
 """
-FlipDot Visual Simulator - All-in-One
+FlipDot Visual Simulator - Enhanced with Input Handling
 Run any of your existing scripts with visual simulation - no code changes needed!
+
+NEW: Automatically handles input() prompts with smart defaults!
 
 Usage:
     python3 visual_simulator.py clock.py           # Run clock.py visually
-    python3 visual_simulator.py pictogrammer.py   # Run pictogrammer.py visually
-    python3 visual_simulator.py                   # Run demo
+    python3 visual_simulator.py live_captions.py   # Run live_captions.py visually
+    python3 visual_simulator.py                    # Run demo
 
 This patches your main library to show output visually instead of sending to hardware.
 Your scripts run completely unchanged - they still import hanover_flipdot_py3 normally!
@@ -18,6 +20,8 @@ import sys
 import os
 import pygame
 import time
+import threading
+import queue
 
 # Import the real library first
 try:
@@ -32,9 +36,108 @@ except ImportError:
     sys.exit(1)
 
 
+def is_main_thread():
+    """Check if we're running on the main thread"""
+    return threading.current_thread() is threading.main_thread()
+
+
 class WindowClosedException(Exception):
     """Exception raised when the pygame window is closed by the user"""
     pass
+
+
+class SmartInputHandler:
+    """Handles input() calls automatically with smart defaults"""
+
+    def __init__(self, debug=False):
+        self.debug = debug
+        self.input_responses = {
+            # Common prompts and their smart defaults
+
+            # Speech recognition test prompts
+            "test speech recognition": "n",
+            "test recognition": "n",
+            "🧪 test speech recognition first": "n",
+
+            # General confirmation prompts
+            "continue": "y",
+            "start": "y",
+            "ready": "y",
+            "🚀 start live captioning": "y",
+            "press enter": "",
+
+            # Port/connection prompts
+            "use default": "y",
+            "default port": "y",
+            "default serial port": "y",
+
+            # Demo/test prompts
+            "demo": "n",
+            "custom": "n",
+            "custom range": "n",
+
+            # Address range prompts
+            "address range": "n",
+
+            # Common y/n patterns
+            "(y/n)": "y",
+            "(y/N)": "y",
+            "(Y/n)": "y",
+            "(n/Y)": "y",
+        }
+
+        # Track prompts for learning
+        self.seen_prompts = []
+
+    def smart_input(self, prompt=""):
+        """Smart input replacement that provides sensible defaults"""
+        original_prompt = prompt
+        prompt_lower = prompt.lower().strip()
+
+        if self.debug:
+            print(f"🤖 INPUT HANDLER: '{prompt}'")
+
+        # Track this prompt
+        self.seen_prompts.append(original_prompt)
+
+        # Find matching response
+        response = None
+        for pattern, default_response in self.input_responses.items():
+            if pattern in prompt_lower:
+                response = default_response
+                break
+
+        # Fallback patterns
+        if response is None:
+            if "(y/n)" in prompt_lower or "(y/N)" in prompt_lower or "(Y/n)" in prompt_lower:
+                # Default to yes for most y/n prompts in demo mode
+                response = "y"
+            elif "press enter" in prompt_lower or "continue" in prompt_lower:
+                response = ""
+            elif "port" in prompt_lower or "address" in prompt_lower:
+                response = "y"  # Use defaults
+            elif "test" in prompt_lower and ("y/n" in prompt_lower):
+                response = "n"  # Skip tests in visual mode
+            else:
+                # Generic fallback - empty string (like pressing Enter)
+                response = ""
+
+        # Show what we're doing
+        if response == "":
+            print(f"📝 AUTO-INPUT: '{prompt}' → [Enter]")
+        else:
+            print(f"📝 AUTO-INPUT: '{prompt}' → '{response}'")
+
+        return response
+
+    def get_input_summary(self):
+        """Get a summary of all input prompts handled"""
+        if self.seen_prompts:
+            print("\n📋 Input prompts handled automatically:")
+            for i, prompt in enumerate(self.seen_prompts, 1):
+                print(f"   {i}. {prompt}")
+        else:
+            print("\n📋 No input prompts were encountered")
 
 
 class VisualHanoverFlipDot:
@@ -101,13 +204,22 @@ class VisualHanoverFlipDot:
         self.header = self.real_display.header
         self.footer = self.real_display.footer
 
-        # Initialize pygame display
-        self.setup_pygame()
+        # Initialize pygame display (only if we're on the main thread)
+        if is_main_thread():
+            self.setup_pygame()
+        else:
+            print("⚠️  Pygame setup skipped (not on main thread)")
+            # Set dummy values so the object still works
+            self.screen = None
+            self.font = None
+            self.small_font = None
+            self.update_count = 0
 
         if debug:
             print(f"✓ Visual simulator ready: {columns}x{rows}")
             print(f"✓ Real display buffer size: {len(self.real_display.buf)}")
             print(f"✓ Real display has write_text: {hasattr(self.real_display, 'write_text')}")
+            print(f"✓ Main thread: {is_main_thread()}")
 
     def setup_pygame(self):
         """Initialize pygame display"""
@@ -151,99 +263,117 @@ class VisualHanoverFlipDot:
         print("✅ Pygame window created and ready")
 
     def update_pygame_display(self):
-        """Update the pygame window with current display state"""
-        # Handle pygame events to keep window responsive
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                print("🚪 Closing visual simulation...")
-                pygame.quit()
-                sys.exit(0)
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    print("🚪 ESC pressed - closing visual simulation...")
+        """Update the pygame window with current display state - main thread only"""
+        # CRITICAL: Only do pygame operations on the main thread (macOS requirement)
+        if not is_main_thread():
+            if self.debug:
+                print("📺 Visual: Skipping pygame update (not on main thread)")
+            return
+
+        try:
+            # Handle pygame events to keep window responsive
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    print("🚪 Closing visual simulation...")
                     pygame.quit()
                     sys.exit(0)
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        print("🚪 ESC pressed - closing visual simulation...")
+                        pygame.quit()
+                        sys.exit(0)
 
-        # Fill background
-        self.screen.fill(self.COLOR_BG)
+            # Fill background
+            self.screen.fill(self.COLOR_BG)
 
-        # Draw title
-        title_text = f"FlipDot Visual Simulation - {self.columns}x{self.rows}"
-        title_surface = self.font.render(title_text, True, self.COLOR_ACCENT)
-        title_rect = title_surface.get_rect()
-        title_rect.centerx = self.window_width // 2
-        title_rect.y = 5
-        self.screen.blit(title_surface, title_rect)
+            # Draw title
+            title_text = f"FlipDot Visual Simulation - {self.columns}x{self.rows}"
+            title_surface = self.font.render(title_text, True, self.COLOR_ACCENT)
+            title_rect = title_surface.get_rect()
+            title_rect.centerx = self.window_width // 2
+            title_rect.y = 5
+            self.screen.blit(title_surface, title_rect)
 
-        # Draw subtitle
-        subtitle_text = "Using real hanover_flipdot_py3.py logic with visual output"
-        subtitle_surface = self.small_font.render(subtitle_text, True, self.COLOR_INFO)
-        subtitle_rect = subtitle_surface.get_rect()
-        subtitle_rect.centerx = self.window_width // 2
-        subtitle_rect.y = 25
-        self.screen.blit(subtitle_surface, subtitle_rect)
+            # Draw subtitle
+            subtitle_text = "Using real hanover_flipdot_py3.py logic with visual output + smart input handling"
+            subtitle_surface = self.small_font.render(subtitle_text, True, self.COLOR_INFO)
+            subtitle_rect = subtitle_surface.get_rect()
+            subtitle_rect.centerx = self.window_width // 2
+            subtitle_rect.y = 25
+            self.screen.blit(subtitle_surface, subtitle_rect)
 
-        # Count active dots for debugging
-        active_dots = 0
+            # Count active dots for debugging
+            active_dots = 0
 
-        # Draw dots
-        for row in range(self.rows):
-            for col in range(self.columns):
-                # Get dot state from real library
-                is_on = self.real_display.get_dot(col, row)
-                if is_on:
-                    active_dots += 1
+            # Draw dots
+            for row in range(self.rows):
+                for col in range(self.columns):
+                    # Get dot state from real library
+                    is_on = self.real_display.get_dot(col, row)
+                    if is_on:
+                        active_dots += 1
 
-                # Calculate dot position
-                x = self.margin + col * (self.dot_size + self.dot_gap)
-                y = self.margin + 50 + row * (self.dot_size + self.dot_gap)
+                    # Calculate dot position
+                    x = self.margin + col * (self.dot_size + self.dot_gap)
+                    y = self.margin + 50 + row * (self.dot_size + self.dot_gap)
 
-                # Choose color
-                color = self.COLOR_DOT_ON if is_on else self.COLOR_DOT_OFF
+                    # Choose color
+                    color = self.COLOR_DOT_ON if is_on else self.COLOR_DOT_OFF
 
-                # Draw dot
-                center_x = x + self.dot_size // 2
-                center_y = y + self.dot_size // 2
-                pygame.draw.circle(self.screen, color, (center_x, center_y), self.dot_size // 2)
-                pygame.draw.circle(self.screen, self.COLOR_BORDER, (center_x, center_y), self.dot_size // 2, 1)
+                    # Draw dot
+                    center_x = x + self.dot_size // 2
+                    center_y = y + self.dot_size // 2
+                    pygame.draw.circle(self.screen, color, (center_x, center_y), self.dot_size // 2)
+                    pygame.draw.circle(self.screen, self.COLOR_BORDER, (center_x, center_y), self.dot_size // 2, 1)
 
-        # Draw status info
-        status_y = self.window_height - 45
+            # Draw status info
+            status_y = self.window_height - 45
 
-        # Update count
-        self.update_count += 1
-        update_text = f"Updates: {self.update_count}"
-        update_surface = self.small_font.render(update_text, True, self.COLOR_TEXT)
-        self.screen.blit(update_surface, (10, status_y))
+            # Update count
+            self.update_count += 1
+            update_text = f"Updates: {self.update_count}"
+            update_surface = self.small_font.render(update_text, True, self.COLOR_TEXT)
+            self.screen.blit(update_surface, (10, status_y))
 
-        # Active dots count
-        dots_text = f"Active dots: {active_dots}"
-        dots_surface = self.small_font.render(dots_text, True, self.COLOR_TEXT)
-        self.screen.blit(dots_surface, (120, status_y))
+            # Active dots count
+            dots_text = f"Active dots: {active_dots}"
+            dots_surface = self.small_font.render(dots_text, True, self.COLOR_TEXT)
+            self.screen.blit(dots_surface, (120, status_y))
 
-        # Speed factor if available
-        if hasattr(self.real_display, 'speed_factor'):
-            speed_text = f"Speed: {self.real_display.speed_factor:.1f}x"
-            speed_surface = self.small_font.render(speed_text, True, self.COLOR_TEXT)
-            self.screen.blit(speed_surface, (250, status_y))
+            # Thread status
+            thread_name = threading.current_thread().name
+            thread_text = f"Thread: {thread_name}"
+            thread_surface = self.small_font.render(thread_text, True, self.COLOR_TEXT)
+            self.screen.blit(thread_surface, (250, status_y))
 
-        # Orientation if flipped
-        if hasattr(self.real_display, 'flip_orientation') and self.real_display.flip_orientation:
-            orient_text = "Orientation: FLIPPED"
-            orient_surface = self.small_font.render(orient_text, True, self.COLOR_ACCENT)
-            self.screen.blit(orient_surface, (350, status_y))
+            # Speed factor if available
+            if hasattr(self.real_display, 'speed_factor'):
+                speed_text = f"Speed: {self.real_display.speed_factor:.1f}x"
+                speed_surface = self.small_font.render(speed_text, True, self.COLOR_TEXT)
+                self.screen.blit(speed_surface, (380, status_y))
 
-        # Controls
-        controls_y = self.window_height - 25
-        controls_text = "ESC or close window to exit"
-        controls_surface = self.small_font.render(controls_text, True, self.COLOR_TEXT)
-        controls_rect = controls_surface.get_rect()
-        controls_rect.centerx = self.window_width // 2
-        controls_rect.y = controls_y
-        self.screen.blit(controls_surface, controls_rect)
+            # Orientation if flipped
+            if hasattr(self.real_display, 'flip_orientation') and self.real_display.flip_orientation:
+                orient_text = "Orientation: FLIPPED"
+                orient_surface = self.small_font.render(orient_text, True, self.COLOR_ACCENT)
+                self.screen.blit(orient_surface, (480, status_y))
 
-        # Update display
-        pygame.display.flip()
+            # Controls
+            controls_y = self.window_height - 25
+            controls_text = "ESC or close window to exit • Worker threads safe on macOS"
+            controls_surface = self.small_font.render(controls_text, True, self.COLOR_TEXT)
+            controls_rect = controls_surface.get_rect()
+            controls_rect.centerx = self.window_width // 2
+            controls_rect.y = controls_y
+            self.screen.blit(controls_surface, controls_rect)
+
+            # Update display
+            pygame.display.flip()
+
+        except Exception as e:
+            if self.debug:
+                print(f"⚠️  Pygame update error: {e}")
+            # Don't crash on pygame errors
 
     def __getattr__(self, name):
         """Delegate any remaining methods to the real display"""
@@ -253,19 +383,24 @@ class VisualHanoverFlipDot:
             raise AttributeError(f"'{self.__class__.__name__}' object has no attribute '{name}'")
 
     def send(self):
-        """Completely override send() to eliminate serial error messages"""
+        """Completely override send() - only do pygame operations on main thread"""
         if self.debug:
-            print("📺 Visual: Sending to display (no serial errors)")
+            thread_name = threading.current_thread().name
+            print(f"📺 Visual: Sending to display from thread '{thread_name}'")
 
-        try:
-            # Update our pygame display directly
-            self.update_pygame_display()
-        except WindowClosedException as e:
-            print(f"🚪 {e}")
-            # Re-raise as SystemExit so the script runner can handle it
-            raise SystemExit(0)
+        # CRITICAL: Only update pygame display if we're on the main thread
+        # On macOS, calling pygame from worker threads causes crashes
+        if is_main_thread():
+            try:
+                self.update_pygame_display()
+            except Exception as e:
+                if self.debug:
+                    print(f"⚠️  Display update error: {e}")
+        else:
+            if self.debug:
+                print("📺 Visual: Skipping pygame update (worker thread - safe on macOS)")
 
-        # Return success (0) to make scripts happy
+        # Always return success (0) to make scripts happy
         return 0
 
     def connect(self):
@@ -336,14 +471,20 @@ def patch_library():
     print("✓ Library patched - all scripts will now show visual output!")
 
 
+def patch_input(input_handler):
+    """Replace the built-in input function with our smart handler"""
+    return input_handler.smart_input
+
+
 def run_script(script_path):
-    """Run a Python script with the patched library"""
+    """Run a Python script with the patched library and smart input handling"""
     if not os.path.exists(script_path):
         print(f"✗ Script not found: {script_path}")
         return False
 
     print(f"🚀 Running {script_path} with visual simulation...")
-    print("=" * 60)
+    print("🤖 Smart input handling enabled - no prompts will block!")
+    print("=" * 70)
 
     try:
         print(f"📂 Loading script: {script_path}")
@@ -353,44 +494,32 @@ def run_script(script_path):
         if script_dir not in sys.path:
             sys.path.insert(0, script_dir)
 
+        # Create smart input handler
+        input_handler = SmartInputHandler(debug=True)
+
         # Make sure the script can import the patched library
         sys.modules['hanover_flipdot_py3'] = hanover_flipdot_py3
 
-        print(f"▶️  Executing script...")
+        print(f"▶️  Executing script with smart input handling...")
 
-        # Redirect stdout temporarily to capture script output
-        import io
-        old_stdout = sys.stdout
-        script_output = io.StringIO()
+        # Read the script file and execute it directly to preserve __name__ == "__main__"
+        with open(script_path, 'r') as f:
+            script_code = f.read()
 
-        try:
-            # Execute the script and capture any output
-            sys.stdout = script_output
+        # Create a proper execution environment with patched input
+        script_globals = {
+            '__name__': '__main__',
+            '__file__': script_path,
+            '__builtins__': __builtins__,
+            'hanover_flipdot_py3': hanover_flipdot_py3,  # Make sure our patched lib is available
+            'input': patch_input(input_handler),  # Replace input with our smart handler
+        }
 
-            # Read the script file and execute it directly to preserve __name__ == "__main__"
-            with open(script_path, 'r') as f:
-                script_code = f.read()
+        # Execute the script as if it was run directly
+        exec(script_code, script_globals)
 
-            # Create a proper execution environment
-            script_globals = {
-                '__name__': '__main__',
-                '__file__': script_path,
-                '__builtins__': __builtins__,
-                'hanover_flipdot_py3': hanover_flipdot_py3  # Make sure our patched lib is available
-            }
-
-            # Execute the script as if it was run directly
-            exec(script_code, script_globals)
-
-        finally:
-            # Restore stdout
-            sys.stdout = old_stdout
-
-        # Show the script's output
-        output = script_output.getvalue()
-        if output.strip():
-            print("📜 Script output:")
-            print(output)
+        # Show input handling summary
+        input_handler.get_input_summary()
 
         print(f"✅ Script execution completed normally")
         print("🖼️  Script finished - close window or press ESC to exit")
@@ -571,22 +700,33 @@ def run_demo():
 
 def show_help():
     """Show usage help"""
-    print("🎯 FlipDot Visual Simulator")
-    print("=" * 50)
+    print("🎯 FlipDot Visual Simulator - Enhanced Edition")
+    print("=" * 55)
+    print("NEW: Automatically handles input() prompts!")
+    print("")
     print("Usage:")
     print("  python3 visual_simulator.py                # Run demo")
     print("  python3 visual_simulator.py <script.py>    # Run script visually")
     print("")
     print("Examples:")
     print("  python3 visual_simulator.py clock.py")
-    print("  python3 visual_simulator.py pictogrammer.py")
+    print("  python3 visual_simulator.py live_captions.py")
     print("  python3 visual_simulator.py address_locator.py")
+    print("  python3 visual_simulator.py demo.py")
     print("")
     print("Features:")
     print("  ✓ No code changes needed in your scripts")
     print("  ✓ Uses your real hanover_flipdot_py3.py logic")
     print("  ✓ Visual output in pygame window")
+    print("  ✓ Smart input handling - no more blocking prompts!")
     print("  ✓ Real fonts, speed control, orientation - everything!")
+    print("")
+    print("Smart Input Handling:")
+    print("  • Automatically answers y/n prompts with sensible defaults")
+    print("  • Skips speech recognition tests (says 'n')")
+    print("  • Uses default ports and addresses (says 'y')")
+    print("  • Auto-continues through setup prompts")
+    print("  • Shows what inputs it's handling automatically")
     print("")
     print("Requirements:")
     print("  pip install pygame")
@@ -594,8 +734,8 @@ def show_help():
 
 def main():
     """Main function"""
-    print("🎯 FlipDot Visual Simulator")
-    print("=" * 50)
+    print("🎯 FlipDot Visual Simulator - Enhanced Edition")
+    print("=" * 55)
 
     # Check pygame
     try:
